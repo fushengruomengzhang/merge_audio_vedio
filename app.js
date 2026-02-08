@@ -180,9 +180,44 @@ const collectSegmentUrls = (playlistUrl, manifest) => {
     throw new Error("未找到可下载的分片。");
   }
 
-  return manifest.segments.map((segment) =>
-    resolveUrl(playlistUrl, segment.uri)
+  const urls = [];
+  const mapUri = manifest.segments[0]?.map?.uri;
+
+  if (mapUri) {
+    urls.push(resolveUrl(playlistUrl, mapUri));
+  }
+
+  urls.push(
+    ...manifest.segments.map((segment) =>
+      resolveUrl(playlistUrl, segment.uri)
+    )
   );
+
+  return urls;
+};
+
+const guessMimeType = (segmentUrls) => {
+  const lastUrl = segmentUrls[segmentUrls.length - 1] || "";
+  if (lastUrl.includes(".m4s") || lastUrl.includes(".mp4")) {
+    return "video/mp4";
+  }
+  if (lastUrl.includes(".ts")) {
+    return "video/mp2t";
+  }
+  return "video/mp4";
+};
+
+const downloadSegments = async (fetcher, segmentUrls) => {
+  const segments = [];
+  for (const segmentUrl of segmentUrls) {
+    const response = await fetcher(segmentUrl);
+    if (!response.ok) {
+      throw new Error(`分片下载失败: ${response.status} ${response.statusText}`);
+    }
+    segments.push(await response.arrayBuffer());
+  }
+
+  return segments;
 };
 
 export const downloadLowestQualityVideo = async (
@@ -218,27 +253,13 @@ export const downloadLowestQualityVideo = async (
       lowestManifestEntry.manifest
     );
 
-    const segments = [];
-    for (const segmentUrl of segmentUrls) {
-      const response = await fetcher(segmentUrl);
-      if (!response.ok) {
-        throw new Error(`分片下载失败: ${response.status} ${response.statusText}`);
-      }
-      segments.push(await response.arrayBuffer());
-    }
-
-    return new Blob(segments, { type: "video/mp4" });
+    const segments = await downloadSegments(fetcher, segmentUrls);
+    const mimeType = guessMimeType(segmentUrls);
+    return new Blob(segments, { type: mimeType });
   }
 
   const segmentUrls = collectSegmentUrls(masterPlaylistUrl, masterManifest);
-  const segments = [];
-  for (const segmentUrl of segmentUrls) {
-    const response = await fetcher(segmentUrl);
-    if (!response.ok) {
-      throw new Error(`分片下载失败: ${response.status} ${response.statusText}`);
-    }
-    segments.push(await response.arrayBuffer());
-  }
-
-  return new Blob(segments, { type: "video/mp4" });
+  const segments = await downloadSegments(fetcher, segmentUrls);
+  const mimeType = guessMimeType(segmentUrls);
+  return new Blob(segments, { type: mimeType });
 };

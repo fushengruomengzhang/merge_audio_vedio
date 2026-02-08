@@ -19,7 +19,7 @@ const mergedBlob = await mergeAudioIntoVideo(videoBuffer, audioBuffer);
 ## 下载 m3u8 最低清晰度视频
 
 `downloadLowestQualityVideo(masterPlaylistUrl, fetcher)` 会读取主播放列表中所有的子播放列表，
-选择最低码率的播放列表并下载所有分片，最终返回 `Blob`。
+选择最低码率的播放列表并下载所有分片（包含 fMP4 的 init 段），最终返回 `Blob`。
 
 ```js
 import { downloadLowestQualityVideo } from "./app.js";
@@ -30,7 +30,8 @@ const url =
 const videoBlob = await downloadLowestQualityVideo(url);
 ```
 
-> 注意：该函数依赖 `m3u8-parser`，请确保你的构建环境可以解析该依赖。
+> 注意：该函数依赖 `m3u8-parser`，请确保你的构建环境可以解析该依赖。下载的
+> HLS 资源可能是 `video/mp2t`（`.ts` 分片）或 `video/mp4`（`.m4s`/fMP4 分片）。
 
 ## 注意事项
 
