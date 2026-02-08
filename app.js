@@ -163,14 +163,51 @@ const selectLowestBandwidthVariant = (variants) => {
   )[0];
 };
 
-const selectAudioRendition = (masterManifest, variant) => {
+const collectAudioRenditions = (masterManifest) => {
   const mediaItems = masterManifest.media || [];
-  const audioItems = mediaItems.filter((item) => item.type === "AUDIO");
+  const audioFromMedia = mediaItems
+      .filter((item) => item.type === "AUDIO" && item.uri)
+      .map((item) => ({
+        uri: item.uri,
+        groupId: item.groupId,
+        name: item.name,
+        default: Boolean(item.default),
+      }));
+
+  const audioGroups = masterManifest.mediaGroups?.AUDIO || {};
+  const audioFromGroups = [];
+
+  Object.entries(audioGroups).forEach(([groupId, groupItems]) => {
+    Object.entries(groupItems || {}).forEach(([name, item]) => {
+      if (!item?.uri) {
+        return;
+      }
+      audioFromGroups.push({
+        uri: item.uri,
+        groupId,
+        name,
+        default: Boolean(item.default),
+      });
+    });
+  });
+
+  if (audioFromMedia.length > 0) {
+    return audioFromMedia;
+  }
+
+  return audioFromGroups;
+};
+
+const selectAudioRendition = (masterManifest, variant) => {
+  const audioItems = collectAudioRenditions(masterManifest);
   if (audioItems.length === 0) {
     return null;
   }
 
-  const groupId = variant?.audio;
+  const groupId =
+      variant?.attributes?.AUDIO ||
+      variant?.audio ||
+      variant?.audioGroupId;
   const candidates = groupId
       ? audioItems.filter((item) => item.groupId === groupId)
       : audioItems;
@@ -216,6 +253,12 @@ const collectSegmentUrls = (playlistUrl, manifest) => {
 
 const guessMimeType = (segmentUrls) => {
   const lastUrl = segmentUrls[segmentUrls.length - 1] || "";
+  if (lastUrl.includes(".aac")) {
+    return "audio/aac";
+  }
+  if (lastUrl.includes(".m4a")) {
+    return "audio/mp4";
+  }
   if (lastUrl.includes(".m4s") || lastUrl.includes(".mp4")) {
     return "video/mp4";
   }
@@ -237,6 +280,9 @@ const downloadSegments = async (fetcher, segmentUrls) => {
 
   return segments;
 };
+
+const isMp4MimeType = (mimeType) =>
+    ["video/mp4", "audio/mp4", "application/mp4"].includes(mimeType);
 
 export const downloadLowestQualityVideo = async (
     masterPlaylistUrl,
@@ -280,7 +326,7 @@ export const downloadLowestQualityVideo = async (
         lowestVariant
     );
 
-    if (audioRendition && mimeType === "video/mp4") {
+    if (audioRendition && isMp4MimeType(mimeType)) {
       const audioPlaylistUrl = resolveUrl(
           masterPlaylistUrl,
           audioRendition.uri
@@ -295,7 +341,7 @@ export const downloadLowestQualityVideo = async (
       const audioMimeType = guessMimeType(audioSegmentUrls);
       const audioBlob = new Blob(audioSegments, { type: audioMimeType });
 
-      if (audioMimeType === "video/mp4") {
+      if (isMp4MimeType(audioMimeType)) {
         const [videoBuffer, audioBuffer] = await Promise.all([
           videoBlob.arrayBuffer(),
           audioBlob.arrayBuffer(),
