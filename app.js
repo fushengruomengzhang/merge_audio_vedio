@@ -160,6 +160,22 @@ const selectLowestBandwidthVariant = (variants) => {
   )[0];
 };
 
+const collectAudioPlaylists = (masterManifest) => {
+  const audioGroups = masterManifest.mediaGroups?.AUDIO;
+  if (!audioGroups) {
+    return [];
+  }
+
+  return Object.values(audioGroups).flatMap((group) =>
+    Object.values(group)
+      .filter((rendition) => rendition?.uri)
+      .map((rendition) => ({
+        uri: rendition.uri,
+        name: rendition.name,
+      }))
+  );
+};
+
 const fetchAllVariantManifests = async (fetcher, masterUrl, variants) => {
   const manifestEntries = await Promise.all(
     variants.map(async (variant) => {
@@ -174,6 +190,28 @@ const fetchAllVariantManifests = async (fetcher, masterUrl, variants) => {
 
   return manifestEntries;
 };
+
+const fetchAllAudioManifests = async (fetcher, masterUrl, audioPlaylists) => {
+  if (audioPlaylists.length === 0) {
+    return [];
+  }
+
+  const manifestEntries = await Promise.all(
+    audioPlaylists.map(async (audio) => {
+      const audioUrl = resolveUrl(masterUrl, audio.uri);
+      const content = await fetchText(fetcher, audioUrl);
+      return {
+        url: audioUrl,
+        name: audio.name,
+        manifest: parseM3u8(content),
+      };
+    })
+  );
+
+  return manifestEntries;
+};
+
+const selectPreferredAudio = (audioPlaylists) => audioPlaylists[0] || null;
 
 const collectSegmentUrls = (playlistUrl, manifest) => {
   if (!manifest.segments || manifest.segments.length === 0) {
@@ -222,16 +260,24 @@ const downloadSegments = async (fetcher, segmentUrls) => {
 
 export const downloadLowestQualityVideo = async (
   masterPlaylistUrl,
-  fetcher = (input, init) => fetch(input, init)
+  fetcher = (input, init) => fetch(input, init),
+  options = {}
 ) => {
+  const { includeAudio = true } = options;
   const masterContent = await fetchText(fetcher, masterPlaylistUrl);
   const masterManifest = parseM3u8(masterContent);
 
   if (masterManifest.playlists && masterManifest.playlists.length > 0) {
+    const audioPlaylists = collectAudioPlaylists(masterManifest);
     const variantManifests = await fetchAllVariantManifests(
       fetcher,
       masterPlaylistUrl,
       masterManifest.playlists
+    );
+    const audioManifests = await fetchAllAudioManifests(
+      fetcher,
+      masterPlaylistUrl,
+      audioPlaylists
     );
     const lowestVariant = selectLowestBandwidthVariant(masterManifest.playlists);
 
@@ -255,7 +301,36 @@ export const downloadLowestQualityVideo = async (
 
     const segments = await downloadSegments(fetcher, segmentUrls);
     const mimeType = guessMimeType(segmentUrls);
-    return new Blob(segments, { type: mimeType });
+    const videoBlob = new Blob(segments, { type: mimeType });
+
+    if (!includeAudio || audioManifests.length === 0) {
+      return videoBlob;
+    }
+
+    const preferredAudio = selectPreferredAudio(audioManifests);
+    if (!preferredAudio) {
+      return videoBlob;
+    }
+
+    if (typeof MP4Box === "undefined") {
+      throw new Error("需要 MP4Box.js 才能合并音频，请先引入 mp4box.all.min.js。");
+    }
+
+    const audioSegmentUrls = collectSegmentUrls(
+      preferredAudio.url,
+      preferredAudio.manifest
+    );
+    const audioSegments = await downloadSegments(fetcher, audioSegmentUrls);
+    const audioBlob = new Blob(audioSegments, {
+      type: guessMimeType(audioSegmentUrls),
+    });
+
+    const [videoBuffer, audioBuffer] = await Promise.all([
+      videoBlob.arrayBuffer(),
+      audioBlob.arrayBuffer(),
+    ]);
+
+    return mergeAudioIntoVideo(videoBuffer, audioBuffer);
   }
 
   const segmentUrls = collectSegmentUrls(masterPlaylistUrl, masterManifest);
