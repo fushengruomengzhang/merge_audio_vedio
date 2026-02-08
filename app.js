@@ -163,6 +163,21 @@ const selectLowestBandwidthVariant = (variants) => {
   )[0];
 };
 
+const selectAudioRendition = (masterManifest, variant) => {
+  const mediaItems = masterManifest.media || [];
+  const audioItems = mediaItems.filter((item) => item.type === "AUDIO");
+  if (audioItems.length === 0) {
+    return null;
+  }
+
+  const groupId = variant?.audio;
+  const candidates = groupId
+      ? audioItems.filter((item) => item.groupId === groupId)
+      : audioItems;
+
+  return candidates.find((item) => item.default) || candidates[0];
+};
+
 const fetchAllVariantManifests = async (fetcher, masterUrl, variants) => {
   const manifestEntries = await Promise.all(
       variants.map(async (variant) => {
@@ -258,7 +273,38 @@ export const downloadLowestQualityVideo = async (
 
     const segments = await downloadSegments(fetcher, segmentUrls);
     const mimeType = guessMimeType(segmentUrls);
-    return new Blob(segments, { type: mimeType });
+    const videoBlob = new Blob(segments, { type: mimeType });
+
+    const audioRendition = selectAudioRendition(
+        masterManifest,
+        lowestVariant
+    );
+
+    if (audioRendition && mimeType === "video/mp4") {
+      const audioPlaylistUrl = resolveUrl(
+          masterPlaylistUrl,
+          audioRendition.uri
+      );
+      const audioContent = await fetchText(fetcher, audioPlaylistUrl);
+      const audioManifest = parseM3u8(audioContent);
+      const audioSegmentUrls = collectSegmentUrls(
+          audioPlaylistUrl,
+          audioManifest
+      );
+      const audioSegments = await downloadSegments(fetcher, audioSegmentUrls);
+      const audioMimeType = guessMimeType(audioSegmentUrls);
+      const audioBlob = new Blob(audioSegments, { type: audioMimeType });
+
+      if (audioMimeType === "video/mp4") {
+        const [videoBuffer, audioBuffer] = await Promise.all([
+          videoBlob.arrayBuffer(),
+          audioBlob.arrayBuffer(),
+        ]);
+        return mergeAudioIntoVideo(videoBuffer, audioBuffer);
+      }
+    }
+
+    return videoBlob;
   }
 
   const segmentUrls = collectSegmentUrls(masterPlaylistUrl, masterManifest);
