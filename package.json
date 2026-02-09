@@ -1,0 +1,9 @@
+{
+  "name": "merge-audio-vedio",
+  "version": "1.0.0",
+  "description": "Download and merge Twitter HLS video into a single file using m3u8-parse and mp4box js.",
+  "type": "module",
+  "bin": {
+    "download-twitter-video": "src/download-twitter-video.js"
+  }
+}
